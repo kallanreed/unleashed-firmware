@@ -6,62 +6,20 @@
 #include <gui/gui.h>
 
 #define TAG "IR Scope"
-#define WIDTH 128
-#define SAMPLES_CNT 1024
-#define ARRAY_LEN 128
+#define COLS 128
+#define ROWS 8
+
+// Timings are in microseconds and alternate On/Off.
 
 typedef struct
 {
-    uint8_t samples[ARRAY_LEN];
-    bool autoscale;
-    uint16_t us_per_sample;
-    FuriMutex* mutex;
+    bool        autoscale;
+    uint16_t    us_per_sample;
+    size_t      timings_cnt;
+    uint32_t*   timings;
+    uint32_t    timings_sum;
+    FuriMutex*  mutex;
 } IRScopeState;
-
-bool ir_scope_state_get_sample(const IRScopeState* state, size_t sample_ix)
-{
-    furi_check(sample_ix < SAMPLES_CNT);
-
-    size_t ix = sample_ix / 8;
-    furi_check(ix < ARRAY_LEN);
-    const uint8_t* sample = &state->samples[ix];
-
-    switch (sample_ix % 8)
-    {
-        case 0: return (*sample & 0x01) == 0x01;
-        case 1: return (*sample & 0x02) == 0x02;
-        case 2: return (*sample & 0x04) == 0x04;
-        case 3: return (*sample & 0x08) == 0x08;
-        case 4: return (*sample & 0x10) == 0x10;
-        case 5: return (*sample & 0x20) == 0x20;
-        case 6: return (*sample & 0x40) == 0x40;
-        case 7: return (*sample & 0x80) == 0x80;
-        default:
-            furi_assert(false);
-            return false;
-    }
-}
-
-void ir_scope_state_set_sample(IRScopeState* state, size_t sample_ix, bool val)
-{
-    furi_check(sample_ix < SAMPLES_CNT);
-
-    size_t ix = sample_ix / 8;
-    furi_check(ix < ARRAY_LEN);
-    uint8_t* sample = &state->samples[ix];
-    
-    switch (sample_ix % 8)
-    {
-        case 0: *sample = val ? (*sample | 0x01 ) : (*sample & ~0x01); break;
-        case 1: *sample = val ? (*sample | 0x02 ) : (*sample & ~0x02); break;
-        case 2: *sample = val ? (*sample | 0x04 ) : (*sample & ~0x04); break;
-        case 3: *sample = val ? (*sample | 0x08 ) : (*sample & ~0x08); break;
-        case 4: *sample = val ? (*sample | 0x10 ) : (*sample & ~0x10); break;
-        case 5: *sample = val ? (*sample | 0x20 ) : (*sample & ~0x20); break;
-        case 6: *sample = val ? (*sample | 0x40 ) : (*sample & ~0x40); break;
-        case 7: *sample = val ? (*sample | 0x80 ) : (*sample & ~0x80); break;
-    }
-}
 
 static void canvas_draw_str_outline(Canvas* canvas, int x, int y, const char* str)
 {
@@ -83,16 +41,24 @@ static void render_callback(Canvas* canvas, void* ctx)
     canvas_clear(canvas);
     canvas_draw_frame(canvas, 0, 0, 128, 64);
 
-    size_t rows = SAMPLES_CNT / WIDTH;
-
-    for (size_t row = 0; row < rows; ++row)
+    bool on = false;
+    size_t ix = 0;
+    int timing_cols = 0;
+    for (size_t row = 0; row < ROWS; ++row)
     {
-        for (size_t col = 0; col < WIDTH; ++col)
+        for (size_t col = 0; col < COLS; ++col)
         {
-            size_t ix = row * WIDTH + col;
-            int height = ir_scope_state_get_sample(state, ix) ? 5 : 0;
+            if (ix < state->timings_cnt && timing_cols < 0)
+            {
+                timing_cols = state->timings[ix] / state->us_per_sample;
+                on = !on;
+            }
+
+            if (timing_cols == 0) ++ix;
+
             int y = row * 8 + 7;
-            canvas_draw_line(canvas, col, y, col, y - height);
+            canvas_draw_line(canvas, col, y, col, y - (on ? 5 : 0));
+            --timing_cols;
         }
     }
 
@@ -120,35 +86,27 @@ static void ir_received_callback(void* ctx, InfraredWorkerSignal* signal)
     furi_check(signal);
     IRScopeState* state = (IRScopeState*)ctx;
 
-    const uint32_t* timings;
-    size_t timings_cnt;
-    uint32_t length = 0;
-
-    infrared_worker_get_raw_signal(signal, &timings, &timings_cnt);
-
     furi_mutex_acquire(state->mutex, FuriWaitForever);
-    memset(state->samples, 0, ARRAY_LEN);
 
-    // Timings are in microseconds and alternate On/Off.
-    if (state->autoscale)
+    const uint32_t* timings;
+    infrared_worker_get_raw_signal(signal, &timings, &state->timings_cnt);
+
+    if (state->timings)
     {
-        for (size_t i = 0; i < timings_cnt; ++i)
-            length += timings[i];
-        state->us_per_sample = length / SAMPLES_CNT;
+        free(state->timings);
+        state->timings_sum = 0;
     }
 
-    size_t ix = 0;
-    bool high = true;
-    for (size_t i = 0; i < timings_cnt; ++i)
-    {
-        for (size_t j = 0; j < timings[i] / state->us_per_sample && ix < SAMPLES_CNT; ++j)
-        {
-            ir_scope_state_set_sample(state, ix, high);
-            ++ix;
-        }
+    state->timings = malloc(state->timings_cnt * sizeof(uint32_t));
 
-        high = !high;
+    // Copy and sum.
+    for (size_t i = 0; i < state->timings_cnt; ++i)
+    {
+        state->timings[i] = timings[i];
+        state->timings_sum += timings[i];
     }
+
+    if (state->autoscale) state->us_per_sample = state->timings_sum / (ROWS * COLS);
 
     furi_mutex_release(state->mutex);
 }
@@ -166,7 +124,8 @@ int32_t ir_scope_app(void* p)
         return -1;    
     }
 
-    IRScopeState state = { .autoscale = false, .us_per_sample = 200, .mutex = NULL };
+    IRScopeState state = { .autoscale = false, .us_per_sample = 200,
+        .timings = NULL, .timings_cnt = 0, .mutex = NULL };
     state.mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     if(!state.mutex)
     {
@@ -196,15 +155,26 @@ int32_t ir_scope_app(void* p)
             furi_mutex_acquire(state.mutex, FuriWaitForever);
 
             if (event.key == InputKeyBack)
+            {
                 processing = false;
+            }
             else if (event.key == InputKeyUp)
+            {
                 state.us_per_sample = MIN(1000, state.us_per_sample + 25);
+                state.autoscale = false;
+            }
             else if (event.key == InputKeyDown)
+            {
                 state.us_per_sample = MAX(25, state.us_per_sample - 25);
+                state.autoscale = false;
+            }
             else if (event.key == InputKeyOk)
             {
-                state.us_per_sample = 200;
                 state.autoscale = !state.autoscale;
+                if (state.autoscale)
+                    state.us_per_sample = state.timings_sum / (ROWS * COLS);
+                else
+                    state.us_per_sample = 200;
             }
 
             view_port_update(view_port);
@@ -215,6 +185,8 @@ int32_t ir_scope_app(void* p)
     // Clean up.
     infrared_worker_rx_stop(worker);
     infrared_worker_free(worker);
+
+    if (state.timings) free(state.timings);
 
     view_port_enabled_set(view_port, false);
     gui_remove_view_port(gui, view_port);
