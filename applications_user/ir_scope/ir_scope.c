@@ -21,6 +21,12 @@ typedef struct
     FuriMutex*  mutex;
 } IRScopeState;
 
+static void state_set_autoscale(IRScopeState* state)
+{
+    if (state->autoscale)
+        state->us_per_sample = state->timings_sum / (ROWS * COLS);
+}
+
 static void canvas_draw_str_outline(Canvas* canvas, int x, int y, const char* str)
 {
     canvas_set_color(canvas, ColorWhite);
@@ -42,13 +48,16 @@ static void render_callback(Canvas* canvas, void* ctx)
     canvas_draw_frame(canvas, 0, 0, 128, 64);
 
     bool on = false;
+    bool done = false;
     size_t ix = 0;
-    int timing_cols = 0;
-    for (size_t row = 0; row < ROWS; ++row)
+    int timing_cols = -1;
+    for (size_t row = 0; row < ROWS && !done; ++row)
     {
-        for (size_t col = 0; col < COLS; ++col)
+        for (size_t col = 0; col < COLS && !done; ++col)
         {
-            if (ix < state->timings_cnt && timing_cols < 0)
+            done = ix >= state->timings_cnt;
+
+            if (!done && timing_cols < 0)
             {
                 timing_cols = state->timings[ix] / state->us_per_sample;
                 on = !on;
@@ -64,7 +73,7 @@ static void render_callback(Canvas* canvas, void* ctx)
 
     canvas_set_font(canvas, FontSecondary);
     if (state->autoscale)
-        canvas_draw_str_outline(canvas, 100, 64, "auto");
+        canvas_draw_str_outline(canvas, 100, 64, "Auto");
     else
     {
         char buf[20];
@@ -106,7 +115,7 @@ static void ir_received_callback(void* ctx, InfraredWorkerSignal* signal)
         state->timings_sum += timings[i];
     }
 
-    if (state->autoscale) state->us_per_sample = state->timings_sum / (ROWS * COLS);
+    state_set_autoscale(state);
 
     furi_mutex_release(state->mutex);
 }
@@ -172,7 +181,7 @@ int32_t ir_scope_app(void* p)
             {
                 state.autoscale = !state.autoscale;
                 if (state.autoscale)
-                    state.us_per_sample = state.timings_sum / (ROWS * COLS);
+                    state_set_autoscale(&state);
                 else
                     state.us_per_sample = 200;
             }
