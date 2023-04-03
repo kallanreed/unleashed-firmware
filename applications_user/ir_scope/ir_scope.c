@@ -3,7 +3,6 @@
 #include <infrared.h>
 #include <infrared_worker.h>
 #include <furi_hal_infrared.h>
-
 #include <gui/gui.h>
 
 #define TAG "IR Scope"
@@ -14,6 +13,8 @@
 typedef struct
 {
     uint8_t samples[ARRAY_LEN];
+    bool autoscale;
+    uint16_t us_per_sample;
     FuriMutex* mutex;
 } IRScopeState;
 
@@ -62,6 +63,17 @@ void ir_scope_state_set_sample(IRScopeState* state, size_t sample_ix, bool val)
     }
 }
 
+static void canvas_draw_str_outline(Canvas* canvas, int x, int y, const char* str)
+{
+    canvas_set_color(canvas, ColorWhite);
+    for (int y1 = -1; y1 <= 1; ++y1)
+        for (int x1 = -1; x1 <= 1; ++x1)
+            canvas_draw_str(canvas, x + x1, y + y1, str);
+
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_str(canvas, x, y, str);
+}
+
 static void render_callback(Canvas* canvas, void* ctx)
 {
     const IRScopeState* state = (IRScopeState*)ctx;
@@ -84,6 +96,16 @@ static void render_callback(Canvas* canvas, void* ctx)
         }
     }
 
+    canvas_set_font(canvas, FontSecondary);
+    if (state->autoscale)
+        canvas_draw_str_outline(canvas, 100, 64, "auto");
+    else
+    {
+        char buf[20];
+        snprintf(buf, sizeof(buf), "%uus", state->us_per_sample);
+        canvas_draw_str_outline(canvas, 100, 64, buf);
+    }
+
     furi_mutex_release(state->mutex);
 }
 
@@ -104,19 +126,22 @@ static void ir_received_callback(void* ctx, InfraredWorkerSignal* signal)
 
     infrared_worker_get_raw_signal(signal, &timings, &timings_cnt);
 
-    for (size_t i = 0; i < timings_cnt; ++i)
-        length += timings[i];
+    furi_mutex_acquire(state->mutex, FuriWaitForever);
+    memset(state->samples, 0, ARRAY_LEN);
 
     // Timings are in microseconds and alternate On/Off.
-    uint32_t us_per_sample = length / SAMPLES_CNT;
+    if (state->autoscale)
+    {
+        for (size_t i = 0; i < timings_cnt; ++i)
+            length += timings[i];
+        state->us_per_sample = length / SAMPLES_CNT;
+    }
 
-    furi_mutex_acquire(state->mutex, FuriWaitForever);
-
-    bool high = true;
     size_t ix = 0;
+    bool high = true;
     for (size_t i = 0; i < timings_cnt; ++i)
     {
-        for (size_t j = 0; j < timings[i] / us_per_sample && ix < SAMPLES_CNT; ++j)
+        for (size_t j = 0; j < timings[i] / state->us_per_sample && ix < SAMPLES_CNT; ++j)
         {
             ir_scope_state_set_sample(state, ix, high);
             ++ix;
@@ -141,7 +166,7 @@ int32_t ir_scope_app(void* p)
         return -1;    
     }
 
-    IRScopeState state = { .mutex = NULL };
+    IRScopeState state = { .autoscale = false, .us_per_sample = 200, .mutex = NULL };
     state.mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     if(!state.mutex)
     {
@@ -166,8 +191,25 @@ int32_t ir_scope_app(void* p)
     bool processing = true;
     while(processing && furi_message_queue_get(event_queue, &event, FuriWaitForever) == FuriStatusOk)
     {
-        if (event.type == InputTypeRelease && event.key == InputKeyBack)
-            processing = false;
+        if (event.type == InputTypeRelease)
+        {
+            furi_mutex_acquire(state.mutex, FuriWaitForever);
+
+            if (event.key == InputKeyBack)
+                processing = false;
+            else if (event.key == InputKeyUp)
+                state.us_per_sample = MIN(1000, state.us_per_sample + 25);
+            else if (event.key == InputKeyDown)
+                state.us_per_sample = MAX(25, state.us_per_sample - 25);
+            else if (event.key == InputKeyOk)
+            {
+                state.us_per_sample = 200;
+                state.autoscale = !state.autoscale;
+            }
+
+            view_port_update(view_port);
+            furi_mutex_release(state.mutex);
+        }
     }
 
     // Clean up.
