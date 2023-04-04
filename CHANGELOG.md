@@ -1,8 +1,12 @@
 ### New changes
+* SubGHz: Support for Allmatic(reads as Beninca), also fix Beninca protocol 
+* SubGHz: Allmatic -> Add Manually
 * Plugins: Show External CC1101 module status in Weather Station and in POCSAG Pager plugins
+* Plugins: Update **TOTP (Authenticator)** [(by akopachov)](https://github.com/akopachov/flipper-zero_authenticator) (Fixes BT issues)
 * SubGHz: Fix false detections of StarLine 72bit, flipper can decode only 64bit
 * SubGHz: ScherKhan, more informative messages instead of "Unknown", may be not correct, because we guessing type by bits
 * SubGHz: Clear code in "Add Manually" scene (by @gid9798 | PR #403)
+* SubGHz: Unification of custom buttons (by @gid9798 | PR #405)
 * Infrared: Universal remote assets updated (by @amec0e | PR #404)
 * Plugins: GPS NMEA (UART) modifications
 ```
@@ -11,6 +15,12 @@
 - Long press Right button to change speed from knots to kilometers per hour
 - Exit from app using long press on back button instead of short press, may be useful in case you want to turn backlight on and accidentally click back
 ```
+* OFW PR 2536: Fixing parsing troika card number (by @achistyakov)
+* OFW PR 2548: Picopass Add more detail to saved info screen (by @bettse)
+* OFW PR 2544: added WAIT_FOR_BUTTON_PRESS functionality to badusb (by @p4p1) 
+* OFW PR 2475: AVR ISP Programmer FAP (by @Skorpionm) (+ AVR ISP enable 5v power on start fix) (beta test, report found issues in our repo)
+* OFW: FatFS: use rtc for timestamping
+* OFW: RPC: increase max message size
 * OFW: Picopass: Elite progress
 * OFW: Improved thread lifecycle
 * OFW: View Model: recursive mutex
