@@ -1,3 +1,4 @@
+// Author: github.com/kallanreed
 #include <furi.h>
 #include <furi_hal.h>
 #include <infrared.h>
@@ -8,8 +9,6 @@
 #define TAG "IR Scope"
 #define COLS 128
 #define ROWS 8
-
-// Timings are in microseconds and alternate On/Off.
 
 typedef struct
 {
@@ -47,10 +46,11 @@ static void render_callback(Canvas* canvas, void* ctx)
     canvas_clear(canvas);
     canvas_draw_frame(canvas, 0, 0, 128, 64);
 
+    // Draw the signal chart.
     bool on = false;
     bool done = false;
     size_t ix = 0;
-    int timing_cols = -1;
+    int timing_cols = -1; // Count of columns used to draw the current timing
     for (size_t row = 0; row < ROWS && !done; ++row)
     {
         for (size_t col = 0; col < COLS && !done; ++col)
